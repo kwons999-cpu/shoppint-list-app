@@ -37,14 +37,58 @@
   </div>
 </div>
 <script>
-  let items = [];
-  try { items = JSON.parse(localStorage.getItem("shopping") || "[]"); } catch (e) {}
+  const SUPABASE_URL = "https://thmgqhsuxcdmpliaqynk.supabase.co";
+  // 공개용 publishable 키 (RLS 정책으로 접근 범위 제한)
+  const SUPABASE_KEY = "sb_publishable_OPGmtkSvKt2mEodBESYhsQ_Jnm54eVj";
+  const TABLE = `${SUPABASE_URL}/rest/v1/shopping-item`;
 
+  async function api(query = "", options = {}) {
+    const res = await fetch(TABLE + query, {
+      ...options,
+      headers: {
+        apikey: SUPABASE_KEY,
+        Authorization: `Bearer ${SUPABASE_KEY}`,
+        "Content-Type": "application/json",
+        ...options.headers,
+      },
+    });
+    if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
+    return res.status === 204 ? null : res.json();
+  }
+
+  let items = [];
   const list = document.getElementById("list");
   const input = document.getElementById("input");
 
-  function save() {
-    try { localStorage.setItem("shopping", JSON.stringify(items)); } catch (e) {}
+  async function load() {
+    try {
+      items = await api("?select=*&order=created_at.asc,id.asc");
+    } catch (e) {
+      console.error(e);
+      list.innerHTML = '<li class="empty" style="justify-content:center">데이터를 불러오지 못했습니다</li>';
+      return false;
+    }
+    return true;
+  }
+
+  // 기존 로컬 스토리지 데이터를 DB로 1회 이전
+  async function migrateLocal() {
+    try {
+      const old = JSON.parse(localStorage.getItem("shopping") || "[]");
+      if (old.length) {
+        await api("", {
+          method: "POST",
+          body: JSON.stringify(old.map(i => ({ text: i.text, done: !!i.done }))),
+        });
+      }
+      localStorage.removeItem("shopping");
+    } catch (e) { console.error(e); }
+  }
+
+  // DB 변경 후 목록 다시 불러오기
+  async function run(action) {
+    try { await action(); } catch (e) { console.error(e); alert("저장에 실패했습니다."); }
+    if (await load()) render();
   }
 
   function render() {
@@ -59,7 +103,7 @@
       const cb = document.createElement("input");
       cb.type = "checkbox";
       cb.checked = item.done;
-      cb.onchange = () => { item.done = cb.checked; save(); render(); };
+      cb.onchange = () => run(() => api(`?id=eq.${item.id}`, { method: "PATCH", body: JSON.stringify({ done: cb.checked }) }));
 
       const span = document.createElement("span");
       span.textContent = item.text;
@@ -68,7 +112,7 @@
       del.className = "del";
       del.textContent = "✕";
       del.title = "삭제";
-      del.onclick = () => { items = items.filter(i => i !== item); save(); render(); };
+      del.onclick = () => run(() => api(`?id=eq.${item.id}`, { method: "DELETE" }));
 
       li.append(cb, span, del);
       list.appendChild(li);
@@ -81,17 +125,17 @@
     e.preventDefault();
     const text = input.value.trim();
     if (!text) return;
-    items.push({ text, done: false });
     input.value = "";
-    save(); render();
+    run(() => api("", { method: "POST", body: JSON.stringify({ text }) }));
   };
 
-  document.getElementById("clear").onclick = () => {
-    items = items.filter(i => !i.done);
-    save(); render();
-  };
+  document.getElementById("clear").onclick = () =>
+    run(() => api("?done=eq.true", { method: "DELETE" }));
 
-  render();
+  (async () => {
+    await migrateLocal();
+    if (await load()) render();
+  })();
 </script>
 </body>
 </html>
